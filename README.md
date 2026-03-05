@@ -1,3 +1,12 @@
+# COMP-3250 Project - Data Driven Used Car Price Estimation 
+
+| Name          |         Contribution          |
+| ------------- | ----------------------------- |
+| Peter Ciastek | TBD                           |
+| Faria Islam   | TBD                           |
+| Ion Kerchani  | TBD                           |
+| Cody Taylor   | TBD                           |
+
 # Abstract 
 The objective of our project is to build a data driven used car price estimation model. This 
 would be based on factors including mileage, age, condition, and more. We chose this 
