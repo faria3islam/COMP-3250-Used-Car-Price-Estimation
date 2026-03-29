@@ -6,13 +6,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from joblib import dump
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import ParameterGrid
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+
+from evaluation import calculate_regression_metrics, compare_models
 
 
 CURRENT_YEAR = pd.Timestamp.now().year
@@ -68,11 +72,11 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 	return feat
 
 
-def build_model_pipeline() -> Pipeline:
+def build_preprocessor() -> ColumnTransformer:
 	numeric_features = ["car_age", "scaled_mileage", "fuel_type_encoded"]
 	categorical_features = ["brand", "accident_reported", "clean_title_flag"]
 
-	preprocessor = ColumnTransformer(
+	return ColumnTransformer(
 		transformers=[
 			(
 				"num",
@@ -92,18 +96,44 @@ def build_model_pipeline() -> Pipeline:
 		]
 	)
 
-	model = RandomForestRegressor(
-		n_estimators=300,
-		random_state=42,
-		n_jobs=-1,
-	)
 
-	return Pipeline(
+def build_model_pipelines() -> dict[str, Pipeline]:
+	preprocessor = build_preprocessor()
+
+	baseline_linear = Pipeline(
 		steps=[
 			("preprocess", preprocessor),
-			("model", model),
+			("model", LinearRegression()),
 		]
 	)
+
+	advanced_random_forest = Pipeline(
+		steps=[
+			("preprocess", preprocessor),
+			(
+				"model",
+				RandomForestRegressor(
+					n_estimators=300,
+					random_state=42,
+					n_jobs=-1,
+				),
+			),
+		]
+	)
+
+	return {
+		"linear_regression": baseline_linear,
+		"random_forest": advanced_random_forest,
+	}
+
+
+def get_random_forest_param_grid() -> list[dict[str, int | None]]:
+	"""Small, explicit grid for advanced-model tuning."""
+	return [
+		{"n_estimators": 200, "max_depth": 10},
+		{"n_estimators": 300, "max_depth": 20},
+		{"n_estimators": 500, "max_depth": None},
+	]
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,38 +184,69 @@ def main() -> None:
 		X, y, test_size=0.2, random_state=42
 	)
 
-	pipeline = build_model_pipeline()
-	pipeline.fit(X_train, y_train)
+	pipelines = build_model_pipelines()
+	all_metrics: list[dict[str, float | int | str]] = []
+	trained_pipelines: dict[str, Pipeline] = {}
 
-	preds = pipeline.predict(X_test)
+	linear_pipeline = pipelines["linear_regression"]
+	linear_pipeline.fit(X_train, y_train)
+	linear_preds = linear_pipeline.predict(X_test)
+	linear_metrics = calculate_regression_metrics(
+		y_true=y_test,
+		y_pred=linear_preds,
+		model_name="linear_regression",
+	)
+	all_metrics.append(
+		{
+			**linear_metrics,
+			"n_train": len(X_train),
+			"n_test": len(X_test),
+		}
+	)
+	trained_pipelines["linear_regression"] = linear_pipeline
 
-	mae = mean_absolute_error(y_test, preds)
-	rmse = mean_squared_error(y_test, preds, squared=False)
-	r2 = r2_score(y_test, preds)
-
-	metrics_df = pd.DataFrame(
-		[
+	rf_base = pipelines["random_forest"]
+	for params in ParameterGrid(get_random_forest_param_grid()):
+		rf_pipeline = clone(rf_base)
+		rf_pipeline.set_params(
+			model__n_estimators=params["n_estimators"],
+			model__max_depth=params["max_depth"],
+		)
+		rf_pipeline.fit(X_train, y_train)
+		rf_preds = rf_pipeline.predict(X_test)
+		model_label = (
+			"random_forest"
+			f"[n_estimators={params['n_estimators']},max_depth={params['max_depth']}]"
+		)
+		rf_metrics = calculate_regression_metrics(
+			y_true=y_test,
+			y_pred=rf_preds,
+			model_name=model_label,
+		)
+		all_metrics.append(
 			{
-				"mae": round(mae, 4),
-				"rmse": round(rmse, 4),
-				"r2": round(r2, 4),
+				**rf_metrics,
 				"n_train": len(X_train),
 				"n_test": len(X_test),
 			}
-		]
-	)
+		)
+		trained_pipelines[model_label] = rf_pipeline
+
+	metrics_df = compare_models(all_metrics)
+	best_model_name = str(metrics_df.iloc[0]["model"])
 
 	args.model_output.parent.mkdir(parents=True, exist_ok=True)
 	args.metrics_output.parent.mkdir(parents=True, exist_ok=True)
 
-	dump(pipeline, args.model_output)
+	# Export the best-performing model based on comparison metrics.
+	dump(trained_pipelines[best_model_name], args.model_output)
 	metrics_df.to_csv(args.metrics_output, index=False)
 
 	print(f"Training rows: {len(X_train)}")
 	print(f"Test rows: {len(X_test)}")
-	print(f"MAE: {mae:.2f}")
-	print(f"RMSE: {rmse:.2f}")
-	print(f"R2: {r2:.4f}")
+	print("Model comparison:")
+	print(metrics_df.to_string(index=False))
+	print(f"Selected best model: {best_model_name}")
 	print(f"Saved model to: {args.model_output.resolve()}")
 	print(f"Saved metrics to: {args.metrics_output.resolve()}")
 

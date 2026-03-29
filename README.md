@@ -39,3 +39,39 @@ well as dealerships, online marketplaces, and insurance companies.
 Our chosen tools and platforms include Power BI for data visualising, Python  
 libraries such as Pandas and Scikit-learn for model building, Jupyter Notebook for 
 analysis, and Kaggle for dataset sourcing.
+
+# Project Scripts
+
+The project now includes modular scripts for cleaner workflow and easier reproducibility:
+
+1. `src/evaluation.py`
+- Purpose: evaluate model predictions in a reusable and consistent way.
+- Calculates core regression metrics such as MAE and RMSE (and R2).
+- Supports comparison-ready output through a structured metrics table.
+
+2. `src/main.py`
+- Purpose: provide a one-command pipeline that runs cleaning, training, and prediction.
+- Integrates all components from raw data processing to final price estimate.
+
+3. `requirements.txt`
+- Purpose: list required Python libraries for setup and reproducibility.
+
+# Quick Start
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run complete pipeline:
+
+```bash
+python src/main.py --skip-predict
+```
+
+Run complete pipeline with final prediction step:
+
+```bash
+python src/main.py
+```
