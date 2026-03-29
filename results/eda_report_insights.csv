@@ -1,0 +1,5 @@
+insight
+"Median used-car price is $31,000."
+"The strongest linear relationship with price is scaled_mileage (correlation = -0.296, negative)."
+"As car age rises, price generally decreases (car_age correlation = -0.190)."
+Higher mileage generally corresponds to lower price (scaled_mileage correlation = -0.296; price decreases with mileage).
