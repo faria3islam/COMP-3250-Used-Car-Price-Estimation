@@ -8,10 +8,10 @@ import pandas as pd
 from joblib import dump
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import ParameterGrid
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -23,12 +23,34 @@ CURRENT_YEAR = pd.Timestamp.now().year
 MODEL_FEATURES = [
 	"car_age",
 	"scaled_mileage",
-	"fuel_type_encoded",
+	"fuel_type_normalized",
 	"brand",
+	"model",
+	"transmission",
+	"engine",
+	"ext_col",
+	"int_col",
 	"accident_reported",
 	"clean_title_flag",
 ]
 TARGET_COLUMN = "price_usd"
+
+
+def filter_target_outliers(
+	df: pd.DataFrame,
+	target_column: str,
+	lower_quantile: float = 0.01,
+	upper_quantile: float = 0.99,
+) -> pd.DataFrame:
+	"""Trim extreme target values so tree models focus on the core market range."""
+	if target_column not in df.columns:
+		return df
+
+	filtered = df.copy()
+	lower_bound = filtered[target_column].quantile(lower_quantile)
+	upper_bound = filtered[target_column].quantile(upper_quantile)
+
+	return filtered[filtered[target_column].between(lower_bound, upper_bound)].copy()
 
 
 def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
@@ -50,7 +72,6 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 		)
 	feat["scaled_mileage"] = mileage_base / 1000
 
-	fuel_map = {"gas": 0, "diesel": 1, "electric": 2}
 	fuel_normalized = feat.get("fuel_type", pd.Series(index=feat.index, dtype="object"))
 	fuel_normalized = fuel_normalized.astype(str).str.strip().str.lower()
 	fuel_normalized = fuel_normalized.replace({"nan": np.nan, "none": np.nan})
@@ -61,7 +82,7 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 			"electric motor": "electric",
 		}
 	)
-	feat["fuel_type_encoded"] = fuel_normalized.map(fuel_map)
+	feat["fuel_type_normalized"] = fuel_normalized
 
 	if TARGET_COLUMN not in feat.columns and "price" in feat.columns:
 		feat[TARGET_COLUMN] = pd.to_numeric(
@@ -73,8 +94,18 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_preprocessor() -> ColumnTransformer:
-	numeric_features = ["car_age", "scaled_mileage", "fuel_type_encoded"]
-	categorical_features = ["brand", "accident_reported", "clean_title_flag"]
+	numeric_features = ["car_age", "scaled_mileage"]
+	categorical_features = [
+		"fuel_type_normalized",
+		"brand",
+		"model",
+		"transmission",
+		"engine",
+		"ext_col",
+		"int_col",
+		"accident_reported",
+		"clean_title_flag",
+	]
 
 	return ColumnTransformer(
 		transformers=[
@@ -98,18 +129,16 @@ def build_preprocessor() -> ColumnTransformer:
 
 
 def build_model_pipelines() -> dict[str, Pipeline]:
-	preprocessor = build_preprocessor()
-
 	baseline_linear = Pipeline(
 		steps=[
-			("preprocess", preprocessor),
+			("preprocess", build_preprocessor()),
 			("model", LinearRegression()),
 		]
 	)
 
 	advanced_random_forest = Pipeline(
 		steps=[
-			("preprocess", preprocessor),
+			("preprocess", build_preprocessor()),
 			(
 				"model",
 				RandomForestRegressor(
@@ -121,9 +150,24 @@ def build_model_pipelines() -> dict[str, Pipeline]:
 		]
 	)
 
+	advanced_extra_trees = Pipeline(
+		steps=[
+			("preprocess", build_preprocessor()),
+			(
+				"model",
+				ExtraTreesRegressor(
+					n_estimators=300,
+					random_state=42,
+					n_jobs=-1,
+				),
+			),
+		]
+	)
+
 	return {
 		"linear_regression": baseline_linear,
 		"random_forest": advanced_random_forest,
+		"extra_trees": advanced_extra_trees,
 	}
 
 
@@ -131,6 +175,14 @@ def get_random_forest_param_grid() -> list[dict[str, int | None]]:
 	"""Small, explicit grid for advanced-model tuning."""
 	return [
 		{"n_estimators": 200, "max_depth": 10},
+		{"n_estimators": 300, "max_depth": 20},
+		{"n_estimators": 500, "max_depth": None},
+	]
+
+
+def get_extra_trees_param_grid() -> list[dict[str, int | None]]:
+	"""Small, explicit grid for extra-trees tuning."""
+	return [
 		{"n_estimators": 300, "max_depth": 20},
 		{"n_estimators": 500, "max_depth": None},
 	]
@@ -184,6 +236,13 @@ def main() -> None:
 		X, y, test_size=0.2, random_state=42
 	)
 
+	# Filter outliers from training data only to avoid data leakage into the test set.
+	train_mask = filter_target_outliers(
+		pd.DataFrame({"y": y_train}), "y"
+	).index
+	X_train = X_train.loc[train_mask]
+	y_train = y_train.loc[train_mask]
+
 	pipelines = build_model_pipelines()
 	all_metrics: list[dict[str, float | int | str]] = []
 	trained_pipelines: dict[str, Pipeline] = {}
@@ -206,7 +265,7 @@ def main() -> None:
 	trained_pipelines["linear_regression"] = linear_pipeline
 
 	rf_base = pipelines["random_forest"]
-	for params in ParameterGrid(get_random_forest_param_grid()):
+	for params in get_random_forest_param_grid():
 		rf_pipeline = clone(rf_base)
 		rf_pipeline.set_params(
 			model__n_estimators=params["n_estimators"],
@@ -231,6 +290,33 @@ def main() -> None:
 			}
 		)
 		trained_pipelines[model_label] = rf_pipeline
+
+	extra_base = pipelines["extra_trees"]
+	for params in get_extra_trees_param_grid():
+		extra_pipeline = clone(extra_base)
+		extra_pipeline.set_params(
+			model__n_estimators=params["n_estimators"],
+			model__max_depth=params["max_depth"],
+		)
+		extra_pipeline.fit(X_train, y_train)
+		extra_preds = extra_pipeline.predict(X_test)
+		model_label = (
+			"extra_trees"
+			f"[n_estimators={params['n_estimators']},max_depth={params['max_depth']}]"
+		)
+		extra_metrics = calculate_regression_metrics(
+			y_true=y_test,
+			y_pred=extra_preds,
+			model_name=model_label,
+		)
+		all_metrics.append(
+			{
+				**extra_metrics,
+				"n_train": len(X_train),
+				"n_test": len(X_test),
+			}
+		)
+		trained_pipelines[model_label] = extra_pipeline
 
 	metrics_df = compare_models(all_metrics)
 	best_model_name = str(metrics_df.iloc[0]["model"])

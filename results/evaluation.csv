@@ -1,0 +1,7 @@
+model,mae,rmse,r2,n_samples,n_train,n_test
+"extra_trees[n_estimators=500,max_depth=None]",19440.209,136212.6817,0.0923,802,3143,802
+"extra_trees[n_estimators=300,max_depth=20]",21100.3768,136214.5098,0.0922,802,3143,802
+"random_forest[n_estimators=200,max_depth=10]",23059.663,136309.7923,0.091,802,3143,802
+"random_forest[n_estimators=300,max_depth=20]",21290.8468,136387.0815,0.0899,802,3143,802
+"random_forest[n_estimators=500,max_depth=None]",20465.3968,136440.9277,0.0892,802,3143,802
+linear_regression,20381.2363,139337.6723,0.0501,802,3143,802

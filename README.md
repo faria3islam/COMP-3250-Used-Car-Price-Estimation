@@ -36,9 +36,7 @@ problem as there are multiple groups that can benefit, mainly individual buyers 
 well as dealerships, online marketplaces, and insurance companies. 
 
 # Tech Stack 
-Our chosen tools and platforms include Power BI for data visualising, Python  
-libraries such as Pandas and Scikit-learn for model building, Jupyter Notebook for 
-analysis, and Kaggle for dataset sourcing.
+Our tools include Power BI for dashboarding, Python libraries (Pandas, NumPy, Scikit-learn, Matplotlib) for data cleaning, feature engineering, modeling, and evaluation, Jupyter Notebooks for exploratory analysis, and a used-car dataset sourced from Kaggle.
 
 # Project Scripts
 

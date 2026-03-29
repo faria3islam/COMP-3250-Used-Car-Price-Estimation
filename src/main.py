@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 from joblib import dump
 from sklearn.base import clone
-from sklearn.model_selection import ParameterGrid, train_test_split
+from sklearn.model_selection import train_test_split
 
 from data_cleaning import clean_used_car_data
 from evaluation import calculate_regression_metrics, compare_models
@@ -15,6 +15,8 @@ from model_training import (
 	TARGET_COLUMN,
 	apply_feature_engineering,
 	build_model_pipelines,
+	filter_target_outliers,
+	get_extra_trees_param_grid,
 	get_random_forest_param_grid,
 )
 from prediction import build_feature_row, parse_bool
@@ -57,6 +59,11 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--mileage", type=float, help="Vehicle mileage in miles.")
 	parser.add_argument("--fuel-type", type=str, help="Fuel type (Gas, Diesel, Electric).")
 	parser.add_argument("--brand", type=str, help="Brand name (for example: Toyota).")
+	parser.add_argument("--vehicle-model", type=str, help="Vehicle model (for example: Camry).")
+	parser.add_argument("--transmission", type=str, help="Transmission type (for example: Automatic).")
+	parser.add_argument("--engine", type=str, help="Engine description (for example: 2.5L 4 Cylinder).")
+	parser.add_argument("--ext-col", type=str, help="Exterior color (for example: White).")
+	parser.add_argument("--int-col", type=str, help="Interior color (for example: Black).")
 	parser.add_argument(
 		"--accident-reported",
 		type=str,
@@ -79,6 +86,16 @@ def prompt_prediction_inputs(args: argparse.Namespace) -> argparse.Namespace:
 		args.fuel_type = input("Fuel type (Gas/Diesel/Electric): ").strip()
 	if not args.brand:
 		args.brand = input("Brand: ").strip()
+	if not args.vehicle_model:
+		args.vehicle_model = input("Vehicle model (for example: Camry, leave blank to skip): ").strip() or "Unknown"
+	if not args.transmission:
+		args.transmission = input("Transmission (for example: Automatic, leave blank to skip): ").strip() or "Unknown"
+	if not args.engine:
+		args.engine = input("Engine (for example: 2.5L 4 Cylinder, leave blank to skip): ").strip() or "Unknown"
+	if not args.ext_col:
+		args.ext_col = input("Exterior color (leave blank to skip): ").strip() or "Unknown"
+	if not args.int_col:
+		args.int_col = input("Interior color (leave blank to skip): ").strip() or "Unknown"
 	if args.accident_reported is None:
 		args.accident_reported = input("Accident reported? (true/false): ").strip()
 	if args.clean_title_flag is None:
@@ -121,6 +138,13 @@ def run_training(
 		X, y, test_size=0.2, random_state=42
 	)
 
+	# Filter outliers from training data only to avoid data leakage into the test set.
+	train_mask = filter_target_outliers(
+		pd.DataFrame({"y": y_train}), "y"
+	).index
+	X_train = X_train.loc[train_mask]
+	y_train = y_train.loc[train_mask]
+
 	pipelines = build_model_pipelines()
 	all_metrics: list[dict[str, float | int | str]] = []
 	trained_pipelines = {}
@@ -143,7 +167,7 @@ def run_training(
 	trained_pipelines["linear_regression"] = linear_pipeline
 
 	rf_base = pipelines["random_forest"]
-	for params in ParameterGrid(get_random_forest_param_grid()):
+	for params in get_random_forest_param_grid():
 		rf_pipeline = clone(rf_base)
 		rf_pipeline.set_params(
 			model__n_estimators=params["n_estimators"],
@@ -168,6 +192,33 @@ def run_training(
 			}
 		)
 		trained_pipelines[model_label] = rf_pipeline
+
+	extra_base = pipelines["extra_trees"]
+	for params in get_extra_trees_param_grid():
+		extra_pipeline = clone(extra_base)
+		extra_pipeline.set_params(
+			model__n_estimators=params["n_estimators"],
+			model__max_depth=params["max_depth"],
+		)
+		extra_pipeline.fit(X_train, y_train)
+		extra_preds = extra_pipeline.predict(X_test)
+		model_label = (
+			"extra_trees"
+			f"[n_estimators={params['n_estimators']},max_depth={params['max_depth']}]"
+		)
+		extra_metrics = calculate_regression_metrics(
+			y_true=y_test,
+			y_pred=extra_preds,
+			model_name=model_label,
+		)
+		all_metrics.append(
+			{
+				**extra_metrics,
+				"n_train": len(X_train),
+				"n_test": len(X_test),
+			}
+		)
+		trained_pipelines[model_label] = extra_pipeline
 
 	metrics_df = compare_models(all_metrics)
 	best_model_name = str(metrics_df.iloc[0]["model"])
@@ -203,6 +254,11 @@ def run_prediction(model, args: argparse.Namespace) -> None:
 		brand=args.brand,
 		accident_reported=parse_bool(args.accident_reported),
 		clean_title_flag=parse_bool(args.clean_title_flag),
+		model=args.vehicle_model or "Unknown",
+		transmission=args.transmission or "Unknown",
+		engine=args.engine or "Unknown",
+		ext_col=args.ext_col or "Unknown",
+		int_col=args.int_col or "Unknown",
 	)
 
 	predicted_price = model.predict(feature_row)[0]
